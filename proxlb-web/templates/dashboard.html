@@ -45,20 +45,18 @@
           <span class="badge {{ 'bg-success' if v.status=='running' else 'bg-secondary' }}">{{ v.status }}</span>
         </td>
         <td>
-          <form action="/action/{{ v.node }}/{{ v.vmid }}/start" method="post" class="d-inline">
+          <form action="/api/action/{{ v.node }}/{{ v.vmid }}/start" method="post" class="d-inline">
             <button class="btn btn-sm btn-success" {{ 'disabled' if v.status=='running' else '' }}>Start</button>
           </form>
-          <form action="/action/{{ v.node }}/{{ v.vmid }}/reboot" method="post" class="d-inline">
+          <form action="/api/action/{{ v.node }}/{{ v.vmid }}/reboot" method="post" class="d-inline">
             <button class="btn btn-sm btn-warning" {{ 'disabled' if v.status!='running' else '' }}>Reboot</button>
           </form>
-          <form action="/action/{{ v.node }}/{{ v.vmid }}/stop" method="post" class="d-inline">
+          <form action="/api/action/{{ v.node }}/{{ v.vmid }}/stop" method="post" class="d-inline">
             <button class="btn btn-sm btn-danger" {{ 'disabled' if v.status!='running' else '' }}>Stop</button>
           </form>
 
-          <!-- Inline migrate button -> replaced by progress bar when clicked -->
           <button class="btn btn-sm btn-primary btn-migrate">Migrate</button>
 
-          <!-- Progress bar placeholder -->
           <div class="progress mt-2 d-none" style="height: 20px;">
             <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
                  style="width: 0%;">0%</div>
@@ -71,74 +69,51 @@
 
   <script>
   async function postJSON(url='', data={}) {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(data)
-    });
+    const r = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
     return r.json();
   }
-
-  async function getJSON(url='') {
-    const r = await fetch(url);
-    return r.json();
-  }
+  async function getJSON(url='') { const r = await fetch(url); return r.json(); }
 
   async function startMigration(row) {
-    const vmid = row.dataset.vmid;
-    const node = row.dataset.node;
-
-    // fire migrate
-    const res = await postJSON('/api/migrate', { vmid: vmid, node: node });
+    const vmid = row.dataset.vmid, node = row.dataset.node;
+    const res = await postJSON('/api/migrate', { vmid, node });
     if (res.error) { alert('Migrate error: ' + res.error); return; }
 
-    // UI: swap button -> progress bar
     const btn = row.querySelector('.btn-migrate');
     const progWrap = row.querySelector('.progress');
     const prog = row.querySelector('.progress-bar');
-    btn.classList.add('d-none');
-    progWrap.classList.remove('d-none');
-    prog.style.width = '0%';
-    prog.textContent = '0%';
+    btn.classList.add('d-none'); progWrap.classList.remove('d-none');
+    prog.style.width = '0%'; prog.textContent = '0%';
 
-    // poll task until finished
-    const upid = res.upid;
-    const taskNode = node; // task lives on source node
-    let done = false;
+    const upid = res.upid, taskNode = node;
+    let done = false, startIdx = 0;
 
     while (!done) {
-      await new Promise(r => setTimeout(r, 2000));
-      const st = await getJSON(`/api/task_status?node=${encodeURIComponent(taskNode)}&upid=${encodeURIComponent(upid)}`);
+      await new Promise(r => setTimeout(r, 1500));
+      const st = await getJSON(`/api/task_status?node=${encodeURIComponent(taskNode)}&upid=${encodeURIComponent(upid)}&start=${startIdx}`);
       if (st.error) { prog.classList.add('bg-danger'); prog.textContent = 'error'; break; }
 
-      const pct = (st.percent || 0);
-      prog.style.width = pct + '%';
-      prog.textContent = pct + '%';
+      if (typeof st.next_start === 'number') startIdx = st.next_start;
 
-      if (st.status === 'stopped' || st.status === 'OK') {
-        done = true;
-        // success?
-        if ((st.exitstatus || '').toUpperCase() === 'OK') {
-          prog.classList.remove('progress-bar-animated');
-          prog.classList.add('bg-success');
-          prog.textContent = '100%';
-          // refresh row node/status after a tiny delay
-          setTimeout(() => window.location.reload(), 1500);
-        } else {
-          prog.classList.add('bg-danger');
-          prog.textContent = st.exitstatus || 'failed';
-        }
+      if (typeof st.percent === 'number') {
+        const pct = Math.max(0, Math.min(100, st.percent));
+        prog.style.width = pct + '%'; prog.textContent = pct + '%';
+      } else {
+        prog.classList.add('progress-bar-animated'); prog.textContent = '...';
+      }
+
+      const status = st.status, exitstatus = (st.exitstatus || '').toUpperCase();
+      if (status === 'stopped') {
+        done = true; prog.classList.remove('progress-bar-animated');
+        if (exitstatus === 'OK') { prog.classList.add('bg-success'); prog.style.width = '100%'; prog.textContent = '100%'; setTimeout(()=>location.reload(), 1200); }
+        else { prog.classList.add('bg-danger'); prog.textContent = exitstatus || 'failed'; }
       }
     }
   }
 
-  // Bind migrate buttons
-  document.querySelectorAll('.btn-migrate').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const row = e.target.closest('tr');
-      startMigration(row);
-    });
-  });
+  document.querySelectorAll('.btn-migrate').forEach(btn => btn.addEventListener('click', (e) => {
+    const row = e.target.closest('tr'); startMigration(row);
+  }));
   </script>
 </body>
 </html>
